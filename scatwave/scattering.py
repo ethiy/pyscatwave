@@ -65,7 +65,11 @@ class Scattering(object):
         self.N_padded = ((N + 2 ** (self.J))//2**self.J+1)*2**self.J
 
         if self.pre_pad:
-            warnings.warn('Make sure you padded the input before to feed it!', RuntimeWarning, stacklevel=2)
+            warnings.warn(
+                'Make sure you padded the input before to feed it!',
+                RuntimeWarning,
+                stacklevel=2
+            )
 
         s[-2] = self.M_padded
         s[-1] = self.N_padded
@@ -74,11 +78,23 @@ class Scattering(object):
     # This function copies and view the real to complex
     def _pad(self, input):
         if(self.pre_pad):
-            output = input.new(input.size(0), input.size(1), input.size(2), input.size(3), 2).fill_(0)
+            output = input.new(
+                input.size(0),
+                input.size(1),
+                input.size(2),
+                input.size(3),
+                2
+            ).fill_(0)
             output.narrow(output.ndimension()-1, 0, 1).copy_(input)
         else:
             out_ = self.padding_module.updateOutput(input)
-            output = input.new(out_.size(0), out_.size(1), out_.size(2), out_.size(3), 2).fill_(0)
+            output = input.new(
+                out_.size(0),
+                out_.size(1),
+                out_.size(2),
+                out_.size(3),
+                2
+            ).fill_(0)
             output.narrow(4, 0, 1).copy_(out_)
         return output
 
@@ -87,19 +103,39 @@ class Scattering(object):
 
     def forward(self, input):
         if not torch.is_tensor(input):
-            raise(TypeError('The input should be a torch.cuda.FloatTensor, a torch.FloatTensor or a torch.DoubleTensor'))
+            raise TypeError(
+                'The input should be a torch.cuda.FloatTensor, a '
+                + 'torch.FloatTensor or a torch.DoubleTensor'
+            )
 
-        if (not input.is_contiguous()):
-            raise (RuntimeError('Tensor must be contiguous!'))
+        if not input.is_contiguous():
+            raise RuntimeError('Tensor must be contiguous!')
 
-        if((input.size(-1)!=self.N or input.size(-2)!=self.M) and not self.pre_pad):
-            raise (RuntimeError('Tensor must be of spatial size (%i,%i)!'%(self.M,self.N)))
+        if(
+            (input.size(-1) != self.N or input.size(-2) != self.M)
+            and not self.pre_pad
+        ):
+            raise RuntimeError(
+                'Tensor must be of spatial size (%i,%i)!',
+                self.M,
+                self.N
+            )
 
-        if ((input.size(-1) != self.N_padded or input.size(-2) != self.M_padded) and self.pre_pad):
-            raise (RuntimeError('Padded tensor must be of spatial size (%i,%i)!' % (self.M_padded, self.N_padded)))
+        if(
+            (
+                input.size(-1) != self.N_padded
+                or input.size(-2) != self.M_padded
+            )
+            and self.pre_pad
+        ):
+            raise RuntimeError(
+                'Padded tensor must be of spatial size (%i,%i)!',
+                self.M_padded,
+                self.N_padded
+            )
 
-        if (input.dim() != 4):
-            raise (RuntimeError('Input tensor must be 4D'))
+        if input.dim() != 4:
+            raise RuntimeError('Input tensor must be 4D')
 
         J = self.J
         phi = self.Phi
@@ -145,12 +181,18 @@ class Scattering(object):
             for n2 in range(len(psi)):
                 j2 = psi[n2]['j']
                 if(j1 < j2):
-                    U_2_c = periodize(cdgmm(U_1_c, psi[n2][j1], jit=self.jit), k=2 ** (j2-j1))
+                    U_2_c = periodize(
+                        cdgmm(U_1_c, psi[n2][j1], jit=self.jit),
+                        k=2 ** (j2-j1)
+                    )
                     fft(U_2_c, 'C2C', inverse=True, inplace=True)
                     U_2_c = fft(modulus(U_2_c), 'C2C')
 
                     # Third low pass filter
-                    U_2_c = periodize(cdgmm(U_2_c, phi[j2], jit=self.jit), k=2 ** (J-j2))
+                    U_2_c = periodize(
+                        cdgmm(U_2_c, phi[j2], jit=self.jit),
+                        k=2 ** (J-j2)
+                    )
                     U_J_r = fft(U_2_c, 'C2R')
 
                     S[..., n, :, :].copy_(unpad(U_J_r))
