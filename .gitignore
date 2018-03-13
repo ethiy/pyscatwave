@@ -1,0 +1,7 @@
+# Git ignore file
+
+# Python Binaries
+*.pyc
+__pycache__
+*.egg
+*.egg-info
