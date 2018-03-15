@@ -116,9 +116,7 @@ class Scattering(object):
             and not self.pre_pad
         ):
             raise RuntimeError(
-                'Tensor must be of spatial size (%i,%i)!',
-                self.M,
-                self.N
+                'Tensor must be of spatial size {}!'.format((self.M, self.N))
             )
 
         if(
@@ -129,9 +127,9 @@ class Scattering(object):
             and self.pre_pad
         ):
             raise RuntimeError(
-                'Padded tensor must be of spatial size (%i,%i)!',
-                self.M_padded,
-                self.N_padded
+                'Padded tensor must be of spatial size {}!'.format(
+                    (self.M_padded, self.N_padded)
+                )
             )
 
         if input.dim() != 4:
