@@ -36,8 +36,7 @@ def f(o, params, stats, mode):
     o = o.view(o.size(0), -1)
     o = F.linear(o, params['linear2.weight'], params['linear2.bias'])
     o = F.relu(o)
-    o = F.linear(o, params['linear3.weight'], params['linear3.bias'])
-    return o
+    return F.linear(o, params['linear3.weight'], params['linear3.bias'])
 
 
 def main():
@@ -89,11 +88,11 @@ def main():
         state['iterator'] = tqdm(state['iterator'])
 
     def on_end_epoch(state):
-        print 'Training accuracy:', classerr.value()
+        print('Training accuracy:', classerr.value())
 
     def on_end(state):
-        print 'Training' if state['train'] else 'Testing', 'accuracy'
-        print classerr.value()
+        print('Training' if state['train'] else 'Testing', 'accuracy')
+        print(classerr.value())
 
     optimizer = torch.optim.SGD(params.values(), lr=0.01, momentum=0.9,
                                 weight_decay=0.0005)
@@ -104,9 +103,9 @@ def main():
     engine.hooks['on_start_epoch'] = on_start_epoch
     engine.hooks['on_end_epoch'] = on_end_epoch
     engine.hooks['on_end'] = on_end
-    print 'Training:'
+    print('Training:')
     engine.train(h, get_iterator(True), 10, optimizer)
-    print 'Testing:'
+    print('Testing:')
     engine.test(h, get_iterator(False))
 
 
