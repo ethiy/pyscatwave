@@ -24,7 +24,7 @@ def getDtype(t):
 
 
 def get_compute_arch(t):
-    return 'compute_%s' % device.Device().compute_capability
+    return 'compute_{}'.format(device.Device().compute_capability)
 
 
 def iscomplex(input):
@@ -32,8 +32,11 @@ def iscomplex(input):
 
 
 class Periodize(object):
-    """This class builds a wrapper to the periodiziation kernels and cache them.
-        """
+    """
+        This class builds a wrapper to the periodiziation kernels and caches
+        them.
+    """
+
     def __init__(self, jit=True):
         self.periodize_cache = defaultdict(lambda: None)
         self.block = (32, 32, 1)
@@ -43,23 +46,48 @@ class Periodize(object):
         return (N + threads - 1) // threads
 
     def __call__(self, input, k):
-        out = input.new(input.size(0), input.size(1), input.size(2) // k, input.size(3) // k, 2)
+        out = input.new(
+            input.size(0),
+            input.size(1),
+            input.size(2) // k,
+            input.size(3) // k,
+            2
+        )
 
-        if not self.jit or isinstance(input, (torch.FloatTensor, torch.DoubleTensor)):
-            y = input.view(input.size(0), input.size(1),
-                           input.size(2)//out.size(2), out.size(2),
-                           input.size(3)//out.size(3), out.size(3),
-                           2)
+        if not self.jit or isinstance(
+            input,
+            (torch.FloatTensor, torch.DoubleTensor)
+        ):
+            y = input.view(
+                input.size(0),
+                input.size(1),
+                input.size(2) // out.size(2),
+                out.size(2),
+                input.size(3) // out.size(3),
+                out.size(3),
+                2
+            )
 
             out = y.mean(4).squeeze(4).mean(2).squeeze(2)
             return out
 
         if not iscomplex(input):
-            raise (TypeError('The input and outputs should be complex'))
+            raise TypeError('The input and outputs should be complex')
 
         input = input.contiguous()
 
-        if (self.periodize_cache[(input.size(), out.size(), input.get_device())] is None):
+        if not self.periodize_cache[
+            (
+                input.size(),
+                out.size(),
+                input.get_device()
+            )
+        ]:
+            B = input.nelement() // (2*input.size(-2) * input.size(-3))
+            H = input.size(-3)
+            W = input.size(-2)
+            k = input.size(-2) // out.size(-2)
+
             kernel = '''
             #define NW ${W} / ${k}
             #define NH ${H} / ${k}
@@ -85,30 +113,76 @@ class Periodize(object):
               output[tz * NH * NW + ty * NW + tx] = res;
             }
             '''
-            B = input.nelement() // (2*input.size(-2) * input.size(-3))
-            W = input.size(-2)
-            H = input.size(-3)
-            k = input.size(-2) // out.size(-2)
-            kernel = Template(kernel).substitute(B=B, H=H, W=W, k=k, Dtype=getDtype(input))
-            name = str(input.get_device())+'-'+str(B)+'-'+str(k)+'-'+str(H)+'-'+str(W)+'-periodize.cu'
+
+            kernel = Template(kernel).substitute(
+                B=B,
+                H=H,
+                W=W,
+                k=k,
+                Dtype=getDtype(input)
+            )
+
+            name = '-'.join(
+                [
+                    str(input.get_device()),
+                    str(B),
+                    str(k),
+                    str(H),
+                    str(W),
+                    'periodize.cu'
+                ]
+            )
             print(name)
-            prog = Program(kernel, name.encode())
-            ptx = prog.compile(['-arch='+get_compute_arch(input)])
+            prog = Program(kernel.encode('utf-8'), name.encode('utf-8'))
+            ptx = prog.compile(
+                [
+                    ('-arch='+get_compute_arch(input)).encode('utf-8')
+                ]
+            )
             module = Module()
             module.load(bytes(ptx.encode()))
-            self.periodize_cache[(input.size(), out.size(), input.get_device())] = module
-        grid = (self.GET_BLOCKS(out.size(-3), self.block[0]),
-                self.GET_BLOCKS(out.size(-2), self.block[1]),
-                self.GET_BLOCKS(out.nelement() // (2*out.size(-2) * out.size(-3)), self.block[2]))
-        periodize = self.periodize_cache[(input.size(), out.size(), input.get_device())].get_function('periodize')
-        periodize(grid=grid, block=self.block, args=[input.data_ptr(), out.data_ptr()],
-                  stream=Stream(ptr=torch.cuda.current_stream().cuda_stream))
+            self.periodize_cache[
+                (
+                    input.size(),
+                    out.size(),
+                    input.get_device()
+                )
+            ] = module
+
+        grid = (
+            self.GET_BLOCKS(
+                out.size(-3),
+                self.block[0]
+            ),
+            self.GET_BLOCKS(
+                out.size(-2),
+                self.block[1]
+            ),
+            self.GET_BLOCKS(
+                out.nelement() // (2*out.size(-2) * out.size(-3)),
+                self.block[2]
+            )
+        )
+        periodize = self.periodize_cache[
+            (
+                input.size(),
+                out.size(),
+                input.get_device()
+            )
+        ].get_function('periodize')
+        periodize(
+            grid=grid,
+            block=self.block,
+            args=[input.data_ptr(), out.data_ptr()],
+            stream=Stream(ptr=torch.cuda.current_stream().cuda_stream)
+        )
         return out
 
 
 class Modulus(object):
-    """This class builds a wrapper to the moduli kernels and cache them.
-        """
+    """
+        This class builds a wrapper to the moduli kernels and caches them.
+    """
     def __init__(self, jit=True):
         self.modulus_cache = defaultdict(lambda: None)
         self.CUDA_NUM_THREADS = 1024
@@ -120,7 +194,10 @@ class Modulus(object):
     def __call__(self, input):
         if not self.jit or not isinstance(input, torch.cuda.FloatTensor):
             norm = input.norm(2, input.dim() - 1)
-            return torch.cat([norm, norm.new(norm.size()).zero_()], input.dim() - 1)
+            return torch.cat(
+                [norm, norm.new(norm.size()).zero_()],
+                input.dim() - 1
+            )
 
         out = input.new(input.size())
         input = input.contiguous()
@@ -128,8 +205,8 @@ class Modulus(object):
         if not iscomplex(input):
             raise TypeError('The input and outputs should be complex')
 
-        if (self.modulus_cache[input.get_device()] is None):
-            kernel = b"""
+        if self.modulus_cache[input.get_device()] is None:
+            kernel = """
             extern "C"
             __global__ void abs_complex_value(const float * x, float2 * z, int n)
             {
@@ -139,18 +216,36 @@ class Modulus(object):
             z[i] = make_float2(normf(2, x + 2*i), 0);
 
             }
-            """
+            """.encode('utf-8')
             print('modulus.cu')
-            prog = Program(kernel, b'modulus.cu')
-            ptx = prog.compile(['-arch='+get_compute_arch(input)])
+            prog = Program(kernel, 'modulus.cu'.encode('utf-8'))
+            ptx = prog.compile(
+                [
+                    ('-arch='+get_compute_arch(input)).encode('utf-8')
+                ]
+            )
             module = Module()
             module.load(bytes(ptx.encode()))
             self.modulus_cache[input.get_device()] = module
-        fabs = self.modulus_cache[input.get_device()].get_function('abs_complex_value')
-        fabs(grid=(self.GET_BLOCKS(int(out.nelement())//2), 1, 1),
-             block=(self.CUDA_NUM_THREADS, 1, 1),
-             args=[input.data_ptr(), out.data_ptr(), out.numel() // 2],
-             stream=Stream(ptr=torch.cuda.current_stream().cuda_stream))
+        fabs = self.modulus_cache[input.get_device()].get_function(
+            'abs_complex_value'
+        )
+        fabs(
+            grid=(
+                self.GET_BLOCKS(int(out.nelement())//2),
+                1,
+                1
+            ),
+            block=(
+                self.CUDA_NUM_THREADS,
+                1,
+                1
+            ),
+            args=[input.data_ptr(), out.data_ptr(), out.numel() // 2],
+            stream=Stream(
+                ptr=torch.cuda.current_stream().cuda_stream
+            )
+        )
         return out
 
 
