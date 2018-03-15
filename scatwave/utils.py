@@ -16,7 +16,7 @@ from string import Template
 Stream = namedtuple('Stream', ['ptr'])
 
 
-def getDtype(t):
+def get_dtype(t):
     if isinstance(t, torch.cuda.FloatTensor):
         return 'float'
     elif isinstance(t, torch.cuda.DoubleTensor):
@@ -27,7 +27,7 @@ def get_compute_arch(t):
     return 'compute_{}'.format(device.Device().compute_capability)
 
 
-def iscomplex(input):
+def is_complex(input):
     return input.size(-1) == 2
 
 
@@ -71,7 +71,7 @@ class Periodize(object):
             out = y.mean(4).squeeze(4).mean(2).squeeze(2)
             return out
 
-        if not iscomplex(input):
+        if not is_complex(input):
             raise TypeError('The input and outputs should be complex')
 
         input = input.contiguous()
@@ -119,7 +119,7 @@ class Periodize(object):
                 H=H,
                 W=W,
                 k=k,
-                Dtype=getDtype(input)
+                Dtype=get_dtype(input)
             )
 
             name = '-'.join(
@@ -202,7 +202,7 @@ class Modulus(object):
         out = input.new(input.size())
         input = input.contiguous()
 
-        if not iscomplex(input):
+        if not is_complex(input):
             raise TypeError('The input and outputs should be complex')
 
         if self.modulus_cache[input.get_device()] is None:
@@ -309,7 +309,7 @@ class Fft(object):
                         out = f(np.fft.fft2(input_np)).astype(out_type)
                     return torch.from_numpy(out)
 
-        if not iscomplex(input):
+        if not is_complex(input):
             raise(TypeError('The input should be complex (e.g. last dimension is 2)'))
 
         if (not input.is_contiguous()):
@@ -340,7 +340,7 @@ def cdgmm(A, B, jit=True, inplace=False):
     if A.size()[-3:] != B.size():
         raise RuntimeError('The filters are not compatible for multiplication!')
 
-    if not iscomplex(A) or not iscomplex(B):
+    if not is_complex(A) or not is_complex(B):
         raise TypeError('The input, filter and output should be complex')
 
     if B.ndimension() != 3:
