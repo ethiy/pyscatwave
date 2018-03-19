@@ -250,15 +250,15 @@ class Modulus(object):
 
 
 class Fft(object):
-    """This class builds a wrapper to the FFTs kernels and cache them.
-
-    As a try, the library will purely work with complex data. The FFTS are UNORMALIZED.
-        """
+    """
+        This class builds a wrapper to the FFTs kernels and cache them.
+        As a try, the library will purely work with complex data. The FFTS are UNORMALIZED.
+    """
 
     def __init__(self):
         self.fft_cache = defaultdict(lambda: None)
 
-    def buildCache(self, input, type):
+    def buildCache(self, input, _type):
         k = input.ndimension() - 3
         n = np.asarray([input.size(k), input.size(k+1)], np.int32)
         batch = input.nelement() // (2*input.size(k) * input.size(k + 1))
@@ -267,9 +267,19 @@ class Fft(object):
         ostride = istride
         odist = idist
         rank = 2
-        plan = cufft.cufftPlanMany(rank, n.ctypes.data, n.ctypes.data, istride,
-                                   idist, n.ctypes.data, ostride, odist, type, batch)
-        self.fft_cache[(input.size(), type, input.get_device())] = plan
+        plan = cufft.cufftPlanMany(
+            rank,
+            n.ctypes.data,
+            n.ctypes.data,
+            istride,
+            idist,
+            n.ctypes.data,
+            ostride,
+            odist,
+            _type,
+            batch
+        )
+        self.fft_cache[(input.size(), _type, input.get_device())] = plan
 
     def __del__(self):
         for keys in self.fft_cache:
@@ -288,57 +298,115 @@ class Fft(object):
                                 torch.FloatTensor or a torch.DoubleTensor'))
             else:
                 input_np = input[..., 0].numpy() + 1.0j * input[..., 1].numpy()
-                f = lambda x: np.stack((np.real(x), np.imag(x)), axis=len(x.shape))
+
                 out_type = input.numpy().dtype
 
                 if direction == 'C2R':
-                    out = np.real(np.fft.ifft2(input_np)).astype(out_type)*input.size(-2)*input.size(-3)
-                    return torch.from_numpy(out)
+                    return torch.from_numpy(
+                        np.real(
+                            np.fft.ifft2(input_np)
+                        ).astype(out_type) * input.size(-2) * input.size(-3)
+                    )
 
                 if inplace:
-                    if inverse:
-                        out = f(np.fft.ifft2(input_np)).astype(out_type)*input.size(-2)*input.size(-3)
-                    else:
-                        out = f(np.fft.fft2(input_np)).astype(out_type)
-                    input.copy_(torch.from_numpy(out))
-                    return
+                    return input.copy_(
+                        torch.from_numpy(
+                            stack_complex(
+                                np.fft.ifft2(input_np)
+                            ).astype(out_type)*input.size(-2)*input.size(-3)
+                            if inverse
+                            else stack_complex(
+                                np.fft.fft2(input_np)
+                            ).astype(out_type)
+                        )
+                    )
                 else:
-                    if inverse:
-                        out = f(np.fft.ifft2(input_np)).astype(out_type)*input.size(-2)*input.size(-3)
-                    else:
-                        out = f(np.fft.fft2(input_np)).astype(out_type)
-                    return torch.from_numpy(out)
+                    return torch.from_numpy(
+                        stack_complex(
+                            np.fft.ifft2(input_np)
+                        ).astype(out_type)*input.size(-2)*input.size(-3)
+                        if inverse
+                        else stack_complex(
+                            np.fft.fft2(input_np)
+                        ).astype(out_type)
+                    )
 
         if not is_complex(input):
-            raise(TypeError('The input should be complex (e.g. last dimension is 2)'))
+            raise TypeError(
+                'The input should be complex (e.g. last dimension is 2)'
+            )
 
-        if (not input.is_contiguous()):
-            raise (RuntimeError('Tensors must be contiguous!'))
+        if not input.is_contiguous():
+            raise RuntimeError('Tensors must be contiguous!')
 
         if direction == 'C2R':
             output = input.new(input.size()[:-1])
-            if(self.fft_cache[(input.size(), cufft.CUFFT_C2R, input.get_device())] is None):
+            if self.fft_cache[
+                (
+                    input.size(),
+                    cufft.CUFFT_C2R,
+                    input.get_device()
+                )
+            ] is None:
                 self.buildCache(input, cufft.CUFFT_C2R)
-            cufft.cufftExecC2R(self.fft_cache[(input.size(), cufft.CUFFT_C2R, input.get_device())],
-                               input.data_ptr(), output.data_ptr())
+            cufft.cufftExecC2R(
+                self.fft_cache[
+                    (
+                        input.size(),
+                        cufft.CUFFT_C2R,
+                        input.get_device()
+                    )
+                ],
+                input.data_ptr(),
+                output.data_ptr()
+            )
             return output
         elif direction == 'C2C':
             output = input.new(input.size()) if not inplace else input
             flag = cufft.CUFFT_INVERSE if inverse else cufft.CUFFT_FORWARD
-            if (self.fft_cache[(input.size(), cufft.CUFFT_C2C, input.get_device())] is None):
+            if self.fft_cache[
+                (
+                    input.size(),
+                    cufft.CUFFT_C2C,
+                    input.get_device()
+                )
+            ] is None:
                 self.buildCache(input, cufft.CUFFT_C2C)
-            cufft.cufftExecC2C(self.fft_cache[(input.size(), cufft.CUFFT_C2C, input.get_device())],
-                               input.data_ptr(), output.data_ptr(), flag)
+            cufft.cufftExecC2C(
+                self.fft_cache[
+                    (
+                        input.size(),
+                        cufft.CUFFT_C2C,
+                        input.get_device()
+                    )
+                ],
+                input.data_ptr(),
+                output.data_ptr(),
+                flag
+            )
             return output
 
 
+def stack_complex(x):
+    return np.stack(
+        (
+            np.real(x),
+            np.imag(x)
+        ),
+        axis=len(x.shape)
+    )
+
+
 def cdgmm(A, B, jit=True, inplace=False):
-    """This function uses the C-wrapper to use cuBLAS.
-        """
+    """
+        This function uses the C-wrapper to use cuBLAS.
+    """
     A, B = A.contiguous(), B.contiguous()
 
     if A.size()[-3:] != B.size():
-        raise RuntimeError('The filters are not compatible for multiplication!')
+        raise RuntimeError(
+            'The filters are not compatible for multiplication!'
+        )
 
     if not is_complex(A) or not is_complex(B):
         raise TypeError('The input, filter and output should be complex')
@@ -352,27 +420,44 @@ def cdgmm(A, B, jit=True, inplace=False):
     if not jit or isinstance(A, (torch.FloatTensor, torch.DoubleTensor)):
         C = A.new(A.size())
 
-        A_r = A[..., 0].contiguous().view(-1, A.size(-2)*A.size(-3))
-        A_i = A[..., 1].contiguous().view(-1, A.size(-2)*A.size(-3))
+        A_r = A[..., 0].contiguous().view(
+            -1,
+            A.size(-2) * A.size(-3)
+        )
+        A_i = A[..., 1].contiguous().view(
+            -1,
+            A.size(-2) * A.size(-3)
+        )
 
-        B_r = B[...,0].contiguous().view(B.size(-2)*B.size(-3)).unsqueeze(0).expand_as(A_i)
-        B_i = B[..., 1].contiguous().view(B.size(-2)*B.size(-3)).unsqueeze(0).expand_as(A_r)
+        B_r = B[..., 0].contiguous().view(
+            B.size(-2) * B.size(-3)
+        ).unsqueeze(0).expand_as(A_i)
+        B_i = B[..., 1].contiguous().view(
+            B.size(-2) * B.size(-3)
+        ).unsqueeze(0).expand_as(A_r)
 
         C[..., 0].copy_(A_r * B_r - A_i * B_i)
         C[..., 1].copy_(A_r * B_i + A_i * B_r)
 
-        # faster if B is actually real
-        #B[...,1] = B[...,0]
-        #C = A * B.unsqueeze(0).expand_as(A)
         return C if not inplace else A.copy_(C)
     else:
         C = A.new(A.size()) if not inplace else A
         m, n = B.nelement() // 2, A.nelement() // B.nelement()
-        lda = m
-        ldc = m
-        incx = 1
         handle = torch.cuda.current_blas_handle()
-        stream = torch.cuda.current_stream()._as_parameter_
-        cublas.cublasSetStream(handle, stream)
-        cublas.cublasCdgmm(handle, 'l', m, n, A.data_ptr(), lda, B.data_ptr(), incx, C.data_ptr(), ldc)
+        cublas.cublasSetStream(
+            handle,
+            torch.cuda.current_stream()._as_parameter_
+        )
+        cublas.cublasCdgmm(
+            handle,
+            'l',
+            m,
+            n,
+            A.data_ptr(),
+            m,
+            B.data_ptr(),
+            1,
+            C.data_ptr(),
+            m
+        )
         return C
