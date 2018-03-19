@@ -140,7 +140,6 @@ class Scattering(object):
             )
 
     def second_level_scatter(self, psi, U):
-        print(len(self.Psi))
         U_1_c = self.fft(
             self.modulus(
                 self.fft(
@@ -158,8 +157,8 @@ class Scattering(object):
             self.unpad(
                 self.fft(
                     self.periodize(
-                        cdgmm(U_1_c, self.Phi[j1], jit=self.jit),
-                        k=pow(2, self.J - j1)
+                        cdgmm(U_1_c, self.Phi[psi['j']], jit=self.jit),
+                        k=pow(2, self.J - psi['j'])
                     ),
                     'C2R'
                 )
@@ -217,8 +216,9 @@ class Scattering(object):
                     )
                 ).unsqueeze(2)
             ] + [
-                self.second_level_scatter(U_0, psi)
+                tensor
                 for psi in self.Psi
+                for tensor in self.second_level_scatter(psi, U_0)
             ],
             dim=2
         )
