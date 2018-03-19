@@ -13,19 +13,6 @@ import operator
 import functools
 
 
-def band_filter(fourier_signal, res):
-    cropped_signal = crop_freq(fourier_signal, res)
-    return torch.FloatTensor(
-        np.stack(
-            (
-                np.real(cropped_signal),
-                np.imag(cropped_signal)
-            ),
-            axis=2
-        )
-    )
-
-
 def filters_bank(M, N, J, L=8, offset=0):
     return {
         'psi': [
@@ -81,6 +68,19 @@ def filters_bank(M, N, J, L=8, offset=0):
     }
 
 
+def band_filter(fourier_signal, res):
+    cropped_signal = crop_freq(fourier_signal, res)
+    return torch.FloatTensor(
+        np.stack(
+            (
+                np.real(cropped_signal),
+                np.imag(cropped_signal)
+            ),
+            axis=2
+        )
+    )
+
+
 def crop_freq(x, res):
     M, N = x.shape[:2]
 
@@ -122,32 +122,66 @@ def crop_freq(x, res):
 
 
 def morlet_2d(M, N, sigma, theta, xi, slant=0.5, offset=0, fft_shift=None):
-    """ This function generated a morlet"""
+    """
+        This function generates a morlet wavelet.
+    """
     wv = gabor_2d(M, N, sigma, theta, xi, slant, offset, fft_shift)
     wv_modulus = gabor_2d(M, N, sigma, theta, 0, slant, offset, fft_shift)
-    K = np.sum(wv) / np.sum(wv_modulus)
-
-    mor = wv - K * wv_modulus
-    return mor
+    return wv - (np.sum(wv) / np.sum(wv_modulus)) * wv_modulus
 
 
 def gabor_2d(M, N, sigma, theta, xi, slant=1.0, offset=0, fft_shift=None):
-    gab = np.zeros((M, N), np.complex64)
-    R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]], np.float32)
-    R_inv = np.array([[np.cos(theta), np.sin(theta)], [-np.sin(theta), np.cos(theta)]], np.float32)
-    D = np.array([[1, 0], [0, slant * slant]])
-    curv = np.dot(R, np.dot(D, R_inv)) / ( 2 * sigma * sigma)
+    if fft_shift is None:
+        curv = np.dot(
+            np.array(
+                [
+                    [np.cos(theta), -np.sin(theta)],
+                    [np.sin(theta), np.cos(theta)]
+                ],
+                np.float32
+            ),
+            np.dot(
+                np.array(
+                    [
+                        [1, 0],
+                        [0, pow(slant, 2)]
+                    ]
+                ),
+                np.array(
+                    [
+                        [np.cos(theta), np.sin(theta)],
+                        [-np.sin(theta), np.cos(theta)]
+                    ],
+                    np.float32
+                )
+            )
+        ) / (2 * pow(sigma, 2))
 
-    for ex in [-2, -1, 0, 1, 2]:
-        for ey in [-2, -1, 0, 1, 2]:
-            [xx, yy] = np.mgrid[offset + ex * M:offset + M + ex * M, offset + ey * N:offset + N + ey * N]
-            arg = -(curv[0, 0] * np.multiply(xx, xx) + (curv[0, 1] + curv[1, 0]) * np.multiply(xx, yy) + curv[
-                1, 1] * np.multiply(yy, yy)) + 1.j * (xx * xi * np.cos(theta) + yy * xi * np.sin(theta))
-            gab = gab + np.exp(arg)
+        return functools.reduce(
+            operator.add,
+            [
+                np.exp(
+                    exponent_arg(ex, ey, M, N, offset, curv, xi, theta)
+                )
+                for ex in range(-2, 3)
+                for ey in range(-2, 3)
+            ],
+            np.zeros((M, N), np.complex64)
+        ) / (2 * 3.1415 * pow(sigma, 2) / slant)
+    else:
+        return np.fft.fftshift(
+            gabor_2d(M, N, sigma, theta, xi, slant, offset, fft_shift=None),
+            axes=(0, 1)
+        )
 
-    norm_factor = (2 * 3.1415 * sigma * sigma / slant)
-    gab = gab / norm_factor
 
-    if (fft_shift):
-        gab = np.fft.fftshift(gab, axes=(0, 1))
-    return gab
+def exponent_arg(ex, ey, M, N, offset, curv, xi, theta):
+    xx, yy = np.mgrid[
+        offset + ex * M: offset + M + ex * M,
+        offset + ey * N:offset + N + ey * N
+    ]
+    return 1.j * (xx * xi * np.cos(theta) + yy * xi * np.sin(theta)) - (
+        curv[0, 0] * np.multiply(xx, xx)
+        + (curv[0, 1] + curv[1, 0]) * np.multiply(xx, yy)
+        + curv[1, 1] * np.multiply(yy, yy)
+    )
