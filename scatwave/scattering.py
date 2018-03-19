@@ -6,14 +6,17 @@ All rights reserved, 2017.
 __all__ = ['Scattering']
 
 import warnings
+
 import torch
+
 from .utils import cdgmm, Modulus, Periodize, Fft
 from .filters_bank import filters_bank
-from torch.legacy.nn import SpatialReflectionPadding as pad_function
+from torch.legacy.nn import SpatialReflectionPadding
 
 
 class Scattering(object):
-    """Scattering module.
+    """
+    Scattering.
 
     Runs scattering on an input image in NCHW format
 
@@ -34,7 +37,7 @@ class Scattering(object):
 
         self._prepare_padding_size([1, 1, M, N])
 
-        self.padding_module = pad_function(2**J)
+        self.padding_module = SpatialReflectionPadding(pow(2, J))
 
         # Create the filters
         filters = filters_bank(self.M_padded, self.N_padded, J)
@@ -58,15 +61,14 @@ class Scattering(object):
         return self._type(torch.FloatTensor)
 
     def _prepare_padding_size(self, s):
-        M = s[-2]
-        N = s[-1]
+        M, N = s[-2:]
 
-        self.M_padded = ((M + 2 ** (self.J))//2**self.J+1)*2**self.J
-        self.N_padded = ((N + 2 ** (self.J))//2**self.J+1)*2**self.J
+        self.M_padded = ((M + 2 ** (self.J))//pow(2, self.J)+1)*pow(2, self.J)
+        self.N_padded = ((N + 2 ** (self.J))//pow(2, self.J)+1)*pow(2, self.J)
 
         if self.pre_pad:
             warnings.warn(
-                'Make sure you padded the input before to feed it!',
+                'Make sure you padded the input before hand!',
                 RuntimeWarning,
                 stacklevel=2
             )
@@ -75,54 +77,59 @@ class Scattering(object):
         s[-1] = self.N_padded
         self.padded_size_batch = torch.Size([a for a in s])
 
-    # This function copies and view the real to complex
-    def _pad(self, input):
+    def pad(self, src):
+        """
+            This function copies and views the real to complex.
+        """
         if(self.pre_pad):
-            output = input.new(
-                input.size(0),
-                input.size(1),
-                input.size(2),
-                input.size(3),
+            dst = src.new(
+                src.size(0),
+                src.size(1),
+                src.size(2),
+                src.size(3),
                 2
-            ).fill_(0)
-            output.narrow(output.ndimension()-1, 0, 1).copy_(input)
+            ).zero_()
+            dst.narrow(dst.ndimension()-1, 0, 1).copy_(
+                torch.unsqueeze(src, 4)
+            )
         else:
-            out_ = self.padding_module.updateOutput(input)
-            output = input.new(
-                out_.size(0),
-                out_.size(1),
-                out_.size(2),
-                out_.size(3),
+            padded = self.padding_module.updateOutput(src)
+            dst = src.new(
+                padded.size(0),
+                padded.size(1),
+                padded.size(2),
+                padded.size(3),
                 2
-            ).fill_(0)
-            output.narrow(4, 0, 1).copy_(out_)
-        return output
+            ).zero_()
+            dst.narrow(4, 0, 1).copy_(
+                torch.unsqueeze(padded, 4)
+            )
+        return dst
 
-    def _unpad(self, in_):
-        return in_[..., 1:-1, 1:-1]
+    def unpad(self, src):
+        return src[..., 1:-1, 1:-1]
 
-    def forward(self, input):
-        if not torch.is_tensor(input):
+    def pre_checks(self, src):
+        if src.dim() != 4:
+            raise RuntimeError('Input tensor must be 4D')
+        if not torch.is_tensor(src):
             raise TypeError(
-                'The input should be a torch.cuda.FloatTensor, a '
+                'The src should be a torch.cuda.FloatTensor, a '
                 + 'torch.FloatTensor or a torch.DoubleTensor'
             )
-
-        if not input.is_contiguous():
+        if not src.is_contiguous():
             raise RuntimeError('Tensor must be contiguous!')
-
         if(
-            (input.size(-1) != self.N or input.size(-2) != self.M)
+            (src.size(-1) != self.N or src.size(-2) != self.M)
             and not self.pre_pad
         ):
             raise RuntimeError(
                 'Tensor must be of spatial size {}!'.format((self.M, self.N))
             )
-
         if(
             (
-                input.size(-1) != self.N_padded
-                or input.size(-2) != self.M_padded
+                src.size(-1) != self.N_padded
+                or src.size(-2) != self.M_padded
             )
             and self.pre_pad
         ):
@@ -132,71 +139,89 @@ class Scattering(object):
                 )
             )
 
-        if input.dim() != 4:
-            raise RuntimeError('Input tensor must be 4D')
-
-        J = self.J
-        phi = self.Phi
-        psi = self.Psi
-        n = 0
-
-        fft = self.fft
-        periodize = self.periodize
-        modulus = self.modulus
-        pad = self._pad
-        unpad = self._unpad
-
-        S = input.new(input.size(0),
-                      input.size(1),
-                      1 + 8*J + 8*8*J*(J - 1) // 2,
-                      self.M_padded//(2**J)-2,
-                      self.N_padded//(2**J)-2)
-        U_r = pad(input)
-        U_0_c = fft(U_r, 'C2C')  # We trick here with U_r and U_2_c
-
-        # First low pass filter
-        U_1_c = periodize(cdgmm(U_0_c, phi[0], jit=self.jit), k=2**J)
-
-        U_J_r = fft(U_1_c, 'C2R')
-
-        S[..., n, :, :].copy_(unpad(U_J_r))
-        n = n + 1
-
-        for n1 in range(len(psi)):
-            j1 = psi[n1]['j']
-            U_1_c = cdgmm(U_0_c, psi[n1][0], jit=self.jit)
-            if(j1 > 0):
-                U_1_c = periodize(U_1_c, k=2 ** j1)
-            fft(U_1_c, 'C2C', inverse=True, inplace=True)
-            U_1_c = fft(modulus(U_1_c), 'C2C')
-
-            # Second low pass filter
-            U_2_c = periodize(cdgmm(U_1_c, phi[j1], jit=self.jit), k=2**(J-j1))
-            U_J_r = fft(U_2_c, 'C2R')
-            S[..., n, :, :].copy_(unpad(U_J_r))
-            n = n + 1
-
-            for n2 in range(len(psi)):
-                j2 = psi[n2]['j']
-                if(j1 < j2):
-                    U_2_c = periodize(
-                        cdgmm(U_1_c, psi[n2][j1], jit=self.jit),
-                        k=2 ** (j2-j1)
+    def second_level_scatter(self, psi, U):
+        print(len(self.Psi))
+        U_1_c = self.fft(
+            self.modulus(
+                self.fft(
+                    self.periodize(
+                        cdgmm(U, psi[0], jit=self.jit),
+                        k=pow(2, psi['j'])
+                    ) if psi['j'] > 0 else cdgmm(U, psi[0], jit=self.jit),
+                    'C2C',
+                    inverse=True
+                )
+            ),
+            'C2C'
+        )
+        return [
+            self.unpad(
+                self.fft(
+                    self.periodize(
+                        cdgmm(U_1_c, self.Phi[j1], jit=self.jit),
+                        k=pow(2, self.J - j1)
+                    ),
+                    'C2R'
+                )
+            ).unsqueeze(2)
+        ] + [
+                self.unpad(
+                    self.fft(
+                        self.periodize(
+                            cdgmm(
+                                self.fft(
+                                    self.modulus(
+                                        self.fft(
+                                            self.periodize(
+                                                cdgmm(
+                                                    U_1_c,
+                                                    _psi[psi['j']],
+                                                    jit=self.jit
+                                                ),
+                                                k=pow(2, _psi['j'] - psi['j'])
+                                            ),
+                                            'C2C',
+                                            inverse=True
+                                        )
+                                    ),
+                                    'C2C'
+                                ),
+                                self.Phi[_psi['j']],
+                                jit=self.jit
+                            ),
+                            k=pow(2, self.J - _psi['j'])
+                        ),
+                        'C2R'
                     )
-                    fft(U_2_c, 'C2C', inverse=True, inplace=True)
-                    U_2_c = fft(modulus(U_2_c), 'C2C')
+                ).unsqueeze(2)
+                for _psi in self.Psi
+                if psi['j'] < _psi['j']
+        ]
 
-                    # Third low pass filter
-                    U_2_c = periodize(
-                        cdgmm(U_2_c, phi[j2], jit=self.jit),
-                        k=2 ** (J-j2)
+    def forward(self, input_tensor):
+        self.pre_checks(input_tensor)
+        U_0 = self.fft(
+            self.pad(input_tensor),
+            'C2C'
+        )
+
+        return torch.cat(
+            [
+                self.unpad(
+                    self.fft(
+                        self.periodize(
+                            cdgmm(U_0, self.Phi[0], jit=self.jit),
+                            k=pow(2, self.J)
+                        ),
+                        'C2R'
                     )
-                    U_J_r = fft(U_2_c, 'C2R')
+                ).unsqueeze(2)
+            ] + [
+                self.second_level_scatter(U_0, psi)
+                for psi in self.Psi
+            ],
+            dim=2
+        )
 
-                    S[..., n, :, :].copy_(unpad(U_J_r))
-                    n = n + 1
-
-        return S
-
-    def __call__(self, input):
-        return self.forward(input)
+    def __call__(self, input_tensor):
+        return self.forward(input_tensor)
